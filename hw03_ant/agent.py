@@ -10,7 +10,7 @@ class Agent:
         
     def act(self, state):
         state = torch.tensor(np.array(state))
-        return 0 # TODO
+        return self.model(state)
 
     def reset(self):
         pass

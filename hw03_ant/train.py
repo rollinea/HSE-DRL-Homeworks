@@ -11,12 +11,13 @@ import copy
 
 GAMMA = 0.99
 TAU = 0.002
-CRITIC_LR = 5e-4
-ACTOR_LR = 2e-4
-DEVICE = "cuda"
+CRITIC_LR = 5e-4 * 2
+ACTOR_LR = 2e-4 * 2
+DEVICE = "cpu"
 BATCH_SIZE = 128
 ENV_NAME = "AntBulletEnv-v0"
-TRANSITIONS = 1000000
+TRANSITIONS = 1800000
+SEED = 42
 
 def soft_update(target, source):
     for tp, sp in zip(target.parameters(), source.parameters()):
@@ -66,7 +67,8 @@ class TD3:
         self.target_actor = copy.deepcopy(self.actor)
         self.target_critic_1 = copy.deepcopy(self.critic_1)
         self.target_critic_2 = copy.deepcopy(self.critic_2)
-        
+
+        self.loss = nn.MSELoss()
         self.replay_buffer = deque(maxlen=200000)
 
     def update(self, transition):
@@ -83,9 +85,32 @@ class TD3:
             done = torch.tensor(np.array(done), device=DEVICE, dtype=torch.float)
             
             # Update critic
-            
+            self.critic_1_optim.zero_grad()
+            self.critic_2_optim.zero_grad()
+
+            with torch.no_grad():
+                next_action = self.target_actor(next_state)
+                next_action = torch.clamp(next_action + eps * torch.randn(*next_action.shape), -1, +1)
+
+                min_ = torch.minimum(self.target_critic_1(next_state, next_action),
+                                     self.target_critic_2(next_state, next_action))
+
+                y_true =  reward + GAMMA * (1 - done) * min_
+
+            critic_1_loss = self.loss(self.critic_1(state, action), y_true)
+            critic_2_loss = self.loss(self.critic_2(state, action), y_true)
+
+            critic_1_loss.backward()
+            critic_2_loss.backward()
+            self.critic_1_optim.step()
+            self.critic_2_optim.step()
+
             # Update actor
-            
+            self.actor_optim.zero_grad()
+            actor_loss = -self.critic_1(state, self.actor(state)).mean()
+            actor_loss.backward()
+            self.actor_optim.step()
+
             soft_update(self.target_critic_1, self.critic_1)
             soft_update(self.target_critic_2, self.critic_2)
             soft_update(self.target_actor, self.actor)
@@ -113,9 +138,13 @@ def evaluate_policy(env, agent, episodes=5):
     return returns
 
 if __name__ == "__main__":
+    torch.manual_seed(SEED)
+    np.random.seed(SEED)
+    random.seed(SEED)
+
     env = make(ENV_NAME)
     test_env = make(ENV_NAME)
-    td3 = TD3(state_dim=env.observation_space.shape[0], action_dim=env.action_space.shape[0])
+    td3 = TD3(state_dim=env.observation_space.shape[0], action_dim=env.action_space.shape[0]) #(28, 8)
     state = env.reset()
     episodes_sampled = 0
     steps_sampled = 0
@@ -133,7 +162,7 @@ if __name__ == "__main__":
         
         state = next_state if not done else env.reset()
         
-        if (i + 1) % (TRANSITIONS//100) == 0:
+        if (i + 1) % (TRANSITIONS//1000) == 0:
             rewards = evaluate_policy(test_env, td3, 5)
             print(f"Step: {i+1}, Reward mean: {np.mean(rewards)}, Reward std: {np.std(rewards)}")
             td3.save()
